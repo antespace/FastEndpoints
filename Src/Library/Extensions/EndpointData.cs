@@ -20,7 +20,7 @@ internal sealed class EndpointData
     {
         _endpoints = new(() =>
         {
-            var endpoints = BuildEndpointDefinitions(services, options, config);
+            var endpoints = BuildEndpointDefin itions(services, options, config);
 
             if (endpoints.Length == 0)
                 throw new InvalidOperationException("FastEndpoints was unable to find any endpoint declarations!");
