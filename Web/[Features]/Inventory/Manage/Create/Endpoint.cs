@@ -21,13 +21,23 @@ public class Endpoint : Endpoint<Request>
             clearDefaults: true);
     }
 
-    public override Task HandleAsync(Request req, CancellationToken ct)
+    public async override Task HandleAsync(Request req, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(req.Description))
             AddError(x => x.Description!, "Please enter a product descriptions!");
 
         if (req.Price > 1000)
             AddError(x => x.Price, "Price is too high!");
+
+        var eventdto = new TestCases.EventHandlingTest.NewItemAddedToStock
+        {
+            Name = req.Name,
+            Quantity = 1
+        };
+        await eventdto.PublishAsync();
+
+        if (eventdto.Name != "pass" && HttpContext.Response.Body is null) //response body is null in a unit test
+            AddError("event publish failed!");
 
         ThrowIfAnyErrors();
 
@@ -40,7 +50,7 @@ public class Endpoint : Endpoint<Request>
             ProductName = req.Name
         };
 
-        return SendCreatedAtAsync<GetProduct.Endpoint>(
+        await SendCreatedAtAsync<GetProduct.Endpoint>(
             routeValues: new { ProductID = res.ProductId },
             responseBody: res,
             generateAbsoluteUrl: req.GenerateFullUrl);

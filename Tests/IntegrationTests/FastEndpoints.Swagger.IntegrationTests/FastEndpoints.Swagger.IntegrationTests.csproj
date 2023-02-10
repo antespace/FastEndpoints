@@ -1,18 +1,35 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <ItemGroup>
+      <None Remove="initial-release.json" />
+      <None Remove="release-1.json" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include="initial-release.json">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </Content>
+      <Content Include="release-1.json">
+          <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </Content>
+      <Content Include="release-2.json">
+          <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="FluentAssertions.Json" Version="6.1.0" />
+    </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\..\..\Src\Swagger\FastEndpoints.Swagger.csproj" />
+        <ProjectReference Include="..\IntegrationTests.Shared\IntegrationTests.Shared.csproj" />
     </ItemGroup>
 
     <ItemGroup>
         <None Update="xunit.runner.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
-    </ItemGroup>
-
-    <ItemGroup>
-      <PackageReference Update="MartinCostello.Logging.XUnit" Version="0.3.0" />
-      <PackageReference Update="Microsoft.AspNetCore.Mvc.Testing" Version="6.0.6" />
     </ItemGroup>
 
 </Project>

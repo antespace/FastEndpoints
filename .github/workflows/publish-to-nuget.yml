@@ -12,9 +12,10 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Setup .Net SDK
-        uses: actions/setup-dotnet@v1
+        uses: actions/setup-dotnet@v2
         with:
-          dotnet-version: 6.x
+          dotnet-version: 7.x
+          include-prerelease: false
 
       - name: Run Tests
         run: dotnet test FastEndpoints.sln --configuration Release --verbosity minimal
@@ -26,3 +27,11 @@ jobs:
         run: dotnet nuget push Src/*/bin/Release/*.nupkg -k $NUGET_AUTH_TOKEN -s https://api.nuget.org/v3/index.json
         env:
           NUGET_AUTH_TOKEN: ${{ secrets.NUGET_API_KEY }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: ${{ !contains(github.ref, 'beta') }}
+        with:
+          draft: false
+          name: ${{ github.ref_name }} Release
+          body_path: Src/Library/changelog.md

@@ -5,13 +5,14 @@ using FastEndpoints.Swagger;
 using Microsoft.AspNetCore.Localization;
 using NSwag;
 using System.Globalization;
+using Web.PipelineBehaviors.PreProcessors;
 using Web.Services;
 
 var builder = WebApplication.CreateBuilder();
 builder.Services.AddCors();
 builder.Services.AddResponseCaching();
-builder.Services.AddFastEndpoints(o => o.SourceGeneratorDiscoveredTypes = DiscoveredTypes.All);
-builder.Services.AddAuthenticationJWTBearer(builder.Configuration["TokenKey"]);
+builder.Services.AddFastEndpoints();//(o => o.SourceGeneratorDiscoveredTypes = DiscoveredTypes.All);
+builder.Services.AddJWTBearerAuth(builder.Configuration["TokenKey"]!);
 builder.Services.AddAuthorization(o => o.AddPolicy("AdminOnly", b => b.RequireRole(Role.Admin)));
 builder.Services.AddScoped<IEmailService, EmailService>();
 
@@ -22,7 +23,9 @@ builder.Services
         s.Title = "Web API";
         s.Version = "v0.0";
     },
-    serializerSettings: x => x.PropertyNamingPolicy = null)
+    serializerSettings: x => x.PropertyNamingPolicy = null,
+    tagCase: TagCase.TitleCase,
+    removeEmptySchemas: false)
 
     .AddSwaggerDoc(maxEndpointVersion: 1, settings: s =>
      {
@@ -35,13 +38,23 @@ builder.Services
              In = OpenApiSecurityApiKeyLocation.Header,
              Type = OpenApiSecuritySchemeType.ApiKey,
          });
-     })
+     },
+    removeEmptySchemas: false)
 
     .AddSwaggerDoc(maxEndpointVersion: 2, settings: s =>
     {
         s.DocumentName = "Release 2.0";
         s.Title = "FastEndpoints Sandbox";
         s.Version = "v2.0";
+    },
+    removeEmptySchemas: false)
+
+    //only ver3 & only FastEndpoints
+    .AddSwaggerDoc(minEndpointVersion: 3, maxEndpointVersion: 3, excludeNonFastEndpoints: true, settings: s =>
+    {
+        s.DocumentName = "Release 3.0";
+        s.Title = "FastEndpoints Sandbox ver3 only";
+        s.Version = "v3.0";
     });
 
 var app = builder.Build();
@@ -63,28 +76,26 @@ app.UseCors(b => b.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.UseFastEndpoints(config =>
+app.UseFastEndpoints(c =>
 {
-    config.ShortEndpointNames = false;
-    config.SerializerOptions = o => o.PropertyNamingPolicy = null;
-    config.EndpointRegistrationFilter = ep => ep.Tags?.Contains("exclude") is not true;
-    config.GlobalEndpointOptions = (epDef, builder) =>
+    c.Serializer.Options.PropertyNamingPolicy = null;
+
+    c.Binding.ValueParserFor<Guid>(x => new(Guid.TryParse(x?.ToString(), out var res), res));
+
+    c.Endpoints.RoutePrefix = "api";
+    c.Endpoints.ShortNames = false;
+    c.Endpoints.Filter = ep => ep.EndpointTags?.Contains("exclude") is not true;
+    c.Endpoints.Configurator = (ep) =>
     {
-        if (epDef.Tags?.Contains("orders") is true)
-            builder.Produces<ErrorResponse>(400, "application/problem+json");
+        ep.PreProcessors(Order.Before, new AdminHeaderChecker());
+        if (ep.EndpointTags?.Contains("orders") is true)
+            ep.Description(b => b.Produces<ErrorResponse>(400, "application/problem+json"));
     };
-    config.RoutingOptions = o => o.Prefix = "api";
-    config.VersioningOptions = o =>
-    {
-        o.Prefix = "v";
-        //o.DefaultVersion = 1; 
-        //o.SuffixedVersion = false; 
-    };
-    config.ThrottleOptions = o =>
-    {
-        o.HeaderName = "X-Custom-Throttle-Header";
-        o.ThrottledResponse = "Custom Error Response";
-    };
+
+    c.Versioning.Prefix = "ver";
+
+    c.Throttle.HeaderName = "X-Custom-Throttle-Header";
+    c.Throttle.Message = "Custom Error Response";
 });
 
 //this must go after usefastendpoints (only if using endpoints)

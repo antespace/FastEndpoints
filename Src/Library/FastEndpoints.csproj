@@ -1,67 +1,30 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
     <PropertyGroup>
-
-        <Version>4.3.0</Version>
-
-        <PackageReleaseNotes>
-            ### NEW
-            - endpoint discovery options argument for `AddFastEndpoints()`
-            - source generator support for type discovery #117
-            - http `HEAD` support #144
-
-            ### IMPROVEMENTS
-            - support empty requests with `application/json` content type #147
-            - throw exception if swagger pipeline is misconfigured #122
-            - validator inheritance for swagger-fluentvalidation integration #126 #135 #141
-            - cancellation token support for hooks #134
-            - upgrade dependancies to latest
-
-            ### FIXES
-            - binding duplicate claim types such as `role` #131
-            - not finding generic parameters of `Summary&lt;TEndpoint,TRequest&gt;` at startup
-            - model binding issue with generic request dtos #143
-
-            ### CHANGES
-            - specifying custom assemblies at startup should now be done like: `AddFastEndpoints(o=&gt; o.Assemblies = ...)`
-            - `AbstractValidator&lt;T&gt;` classes will no longer be auto discovered due to #140
-            - moved `ValidationFailureException` to `FastEndpoints` namespace. you'll have to add a `Using FastEndoints;` import statement if this class is referenced from your code.
-        </PackageReleaseNotes>
-
-        <TargetFramework>net6.0</TargetFramework>
-        <ImplicitUsings>enable</ImplicitUsings>
-        <Nullable>enable</Nullable>
-        <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <NoWarn>1701;1702;CS1591;CS1573,CA2254;RCS1079;CS8618</NoWarn>
-        <Authors>Đĵ ΝιΓΞΗΛψΚ</Authors>
-        <Description>A light-weight REST Api framework for ASP.Net 6 that implements REPR (Request-Endpoint-Response) Pattern.</Description>
-        <PackageProjectUrl>https://fast-endpoints.com/</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/dj-nitehawk/FastEndpoints.git</RepositoryUrl>
-        <RepositoryType>git</RepositoryType>
+        <NoWarn>1701;1702;CS1591;CS1573,CA2254;RCS1079;CS8618;IDE0022</NoWarn>
+        <Description>A light-weight REST Api framework for ASP.Net 6 and newer that implements REPR (Request-Endpoint-Response) Pattern.</Description>
         <PackageIcon>icon.png</PackageIcon>
-        <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <PackageTags>http, rest, rest-api, web-api, webapi, aspnet, aspnetcore, dotnet6, minimal-api, vertical-slice-architecture, repr-pattern</PackageTags>
         <OutputType>Library</OutputType>
-        <PublishRepositoryUrl>true</PublishRepositoryUrl>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
         <IncludeSymbols>true</IncludeSymbols>
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="FluentValidation" Version="11.0.3" />
+        <ProjectReference Include="..\Attributes\FastEndpoints.Attributes.csproj" />
+        <PackageReference Include="FluentValidation" Version="11.4.0" />
         <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1" PrivateAssets="All" />
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 
     <ItemGroup>
-        <Folder Include="Properties\" />
-    </ItemGroup>
-
-    <ItemGroup>
         <None Include="..\..\README.md" Pack="true" PackagePath="\" Link="Content\Readme" />
-        <None Include="..\Documentation\images\icon.png" Pack="true" PackagePath="\" Link="Content\Icon" />
+        <None Include="..\icon.png" Pack="true" PackagePath="\" Link="Content\Icon" />
+        <None Include="changelog.md" Pack="false" Link="Content\Changelog" />
+        <None Include="..\Directory.Build.props" Pack="false" Link="Content\BuildProps" />
+        <None Include="JetBrains\ExternalAnnotations.xml" Pack="true" PackagePath="lib\$(TargetFramework)\$(AssemblyName).ExternalAnnotations.xml">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
-
 </Project>

@@ -1,8 +1,12 @@
-﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+﻿using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
+using static FastEndpoints.Security.JWTBearer;
 
 namespace FastEndpoints.Security;
 
@@ -15,10 +19,14 @@ public static class AuthExtensions
     /// configure and enable jwt bearer authentication
     /// </summary>
     /// <param name="tokenSigningKey">the secret key to use for verifying the jwt tokens</param>
-    /// <param name="issuer">validates issuer if set</param>
-    /// <param name="audience">validates audience if set</param>
-    public static IServiceCollection AddAuthenticationJWTBearer(
-        this IServiceCollection services, string tokenSigningKey, string? issuer = null, string? audience = null)
+    /// <param name="tokenSigningStyle">specify the token signing style</param>
+    /// <param name="tokenValidation">configuration action to specify additional token validation parameters</param>
+    /// <param name="bearerEvents">configuration action to specify custom jwt bearer events</param>
+    public static IServiceCollection AddJWTBearerAuth(this IServiceCollection services,
+                                                      string tokenSigningKey,
+                                                      TokenSigningStyle tokenSigningStyle = TokenSigningStyle.Symmetric,
+                                                      Action<TokenValidationParameters>? tokenValidation = null,
+                                                      Action<JwtBearerEvents>? bearerEvents = null)
     {
         services.AddAuthentication(o =>
         {
@@ -27,16 +35,55 @@ public static class AuthExtensions
         })
         .AddJwtBearer(o =>
         {
+            SecurityKey key;
+            if (tokenSigningStyle == TokenSigningStyle.Symmetric)
+            {
+                key = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(tokenSigningKey));
+            }
+            else
+            {
+                using var rsa = RSA.Create();
+                rsa.ImportRSAPublicKey(Convert.FromBase64String(tokenSigningKey), out _);
+                key = new RsaSecurityKey(rsa);
+            }
             o.TokenValidationParameters = new TokenValidationParameters
             {
+                IssuerSigningKey = key,
                 ValidateIssuerSigningKey = true,
-                ValidateAudience = audience is not null,
-                ValidAudience = audience,
-                ValidateIssuer = issuer is not null,
-                ValidIssuer = issuer,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(tokenSigningKey))
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.FromSeconds(60),
+                ValidAudience = null,
+                ValidateAudience = false,
+                ValidIssuer = null,
+                ValidateIssuer = false
             };
+            tokenValidation?.Invoke(o.TokenValidationParameters);
+            o.TokenValidationParameters.ValidateAudience = o.TokenValidationParameters.ValidAudience is not null;
+            o.TokenValidationParameters.ValidateIssuer = o.TokenValidationParameters.ValidIssuer is not null;
+            bearerEvents?.Invoke(o.Events ??= new());
         });
+
+        return services;
+    }
+
+    /// <summary>
+    /// configure and enable cookie based authentication
+    /// </summary>
+    /// <param name="validFor">specify how long the created cookie is valid for with a <see cref="TimeSpan"/></param>
+    /// <param name="options">optional action for configuring cookie authentication options</param>
+    public static IServiceCollection AddCookieAuth(this IServiceCollection services,
+                                                   TimeSpan validFor,
+                                                   Action<CookieAuthenticationOptions>? options = null)
+    {
+        services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+            .AddCookie(o =>
+            {
+                o.ExpireTimeSpan = validFor;
+                o.Cookie.MaxAge = validFor;
+                o.Cookie.HttpOnly = true;
+                o.Cookie.SameSite = SameSiteMode.Lax;
+                options?.Invoke(o);
+            });
 
         return services;
     }

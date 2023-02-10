@@ -1,4 +1,5 @@
 using FakeItEasy;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -10,6 +11,29 @@ namespace FastEndpoints.UnitTests.WebTests;
 public class UnitTests
 {
     [Fact]
+    public async Task endpoint_with_mapper_returns_correct_response()
+    {
+        //arrange
+        var logger = A.Fake<ILogger<TestCases.MapperTest.Endpoint>>();
+        var ep = Factory.Create<TestCases.MapperTest.Endpoint>(logger);
+        ep.Map = new TestCases.MapperTest.Mapper();
+        var req = new TestCases.MapperTest.Request
+        {
+            FirstName = "john",
+            LastName = "doe",
+            Age = 22
+        };
+
+        //act
+        await ep.HandleAsync(req, default);
+
+        //assert
+        ep.Response.Should().NotBeNull();
+        ep.Response.Name.Should().Be("john doe");
+        ep.Response.Age.Should().Be(22);
+    }
+
+    [Fact]
     public async Task handle_with_correct_input_without_context_should_set_create_customer_response_correctly()
     {
         var emailer = A.Fake<IEmailService>();
@@ -19,8 +43,8 @@ public class UnitTests
             {
                 var services = new ServiceCollection();
 
-                var logger = A.Fake<ILogger<Endpoint<Customers.Create.Request, object>>>();
-                services.AddSingleton(logger);
+                var loggerFactory = A.Fake<ILoggerFactory>();
+                services.AddSingleton(loggerFactory);
 
                 ctx.RequestServices = services.BuildServiceProvider();
             }
@@ -96,5 +120,27 @@ public class UnitTests
         res?.Customers?.Count().Should().Be(3);
         res?.Customers?.First().Key.Should().Be("ryan gunner");
         res?.Customers?.Last().Key.Should().Be(res?.Customers?.Last().Key);
+    }
+
+    [Fact]
+    public async Task created_at_success()
+    {
+        var linkgen = A.Fake<LinkGenerator>();
+
+        var ep = Factory.Create<Inventory.Manage.Create.Endpoint>(ctx =>
+        {
+            var services = new ServiceCollection();
+            services.AddSingleton(linkgen);
+            ctx.RequestServices = services.BuildServiceProvider();
+        });
+
+        await ep.HandleAsync(new()
+        {
+            Name = "Grape Juice",
+            Description = "description",
+            ModifiedBy = "me",
+            Price = 100,
+            GenerateFullUrl = false
+        }, default);
     }
 }

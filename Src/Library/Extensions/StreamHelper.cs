@@ -36,7 +36,11 @@ internal static class StreamHelper
         response.ContentType = contentType;
 
         if (fileName is not null)
-            ctx.Response.Headers.Add("Content-Disposition", $"attachment; filename={fileName}");
+        {
+            var cdHdr = new ContentDispositionHeaderValue("attachment");
+            cdHdr.SetHttpFileName(fileName);
+            ctx.Response.Headers.ContentDisposition = cdHdr.ToString();
+        }
 
         if (fileLength is not null)
         {

@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "SourceGenerator": {
+    "gen": {
       "commandName": "DebugRoslynComponent",
       "targetProject": "..\\..\\Web\\Web.csproj"
     }

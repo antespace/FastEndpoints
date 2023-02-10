@@ -18,8 +18,8 @@ public class Endpoint : Endpoint<Request, Response>
         Verbs(Http.POST, Http.PUT, Http.PATCH);
         Routes("admin/login");
         AllowAnonymous();
-        ScopedValidator();
         Options(b => b.RequireCors(b => b.AllowAnyOrigin()));
+        RequestBinder(new RequestBinder<Request>(BindingSource.JsonBody | BindingSource.QueryParams));
         Description(b => b
             .Accepts<Request>("application/json")
             .Produces<Response>(200, "application/json")
@@ -70,7 +70,7 @@ public class Endpoint : Endpoint<Request, Response>
                     Role.Staff };
 
             var token = JWTBearer.CreateToken(
-                _config["TokenKey"],
+                _config["TokenKey"]!,
                 expiryDate,
                 userPermissions,
                 userRoles,

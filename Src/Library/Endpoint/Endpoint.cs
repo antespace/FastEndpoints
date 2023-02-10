@@ -1,65 +1,119 @@
 ﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Extensions;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
-using static FastEndpoints.Config;
+using Microsoft.Net.Http.Headers;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 namespace FastEndpoints;
+
+/// <summary>
+/// use this base class for defining endpoints that only use a request dto and don't use a response dto.
+/// </summary>
+/// <typeparam name="TRequest">the type of the request dto</typeparam>
+public abstract class Endpoint<TRequest> : Endpoint<TRequest, object> where TRequest : notnull, new() { };
+
+/// <summary>
+/// use this base class for defining endpoints that only use a request dto and don't use a response dto but uses a request mapper.
+/// </summary>
+/// <typeparam name="TRequest">the type of the request dto</typeparam>
+/// <typeparam name="TMapper">the type of the entity mapper</typeparam>
+public abstract class EndpointWithMapper<TRequest, TMapper> : Endpoint<TRequest, object>, IHasMapper<TMapper> where TRequest : notnull, new() where TMapper : notnull, IRequestMapper
+{
+    private TMapper? _mapper;
+
+    /// <summary>
+    /// the entity mapper for the endpoint
+    /// <para>HINT: entity mappers are singletons for performance reasons. do not maintain state in the mappers.</para>
+    /// </summary>
+    [DontInject]
+    public TMapper Map {
+        get => _mapper ??= (TMapper)Definition.GetMapper()!;
+        set => _mapper = value; //allow unit tests to set mapper from outside
+    }
+}
 
 /// <summary>
 /// use this base class for defining endpoints that use both request and response dtos.
 /// </summary>
 /// <typeparam name="TRequest">the type of the request dto</typeparam>
 /// <typeparam name="TResponse">the type of the response dto</typeparam>
-public abstract partial class Endpoint<TRequest, TResponse> : BaseEndpoint, IServiceResolver where TRequest : notnull, new() where TResponse : notnull, new()
+public abstract partial class Endpoint<TRequest, TResponse> : BaseEndpoint, IEventBus, IServiceResolverBase where TRequest : notnull, new()
 {
-    internal async override Task ExecAsync(HttpContext ctx, EndpointDefinition endpoint, CancellationToken cancellation)
+    internal async override Task ExecAsync(CancellationToken ct)
     {
-        _httpContext = ctx;
-        Definition = endpoint;
+        TRequest req = default!;
+
         try
         {
-            var req = await BindToModel(ctx, ValidationFailures, endpoint.SerializerContext, endpoint.DontBindFormData, cancellation);
+            req = await BindRequestAsync(
+                Definition,
+                HttpContext,
+                ValidationFailures,
+                ct);
 
             OnBeforeValidate(req);
-            await OnBeforeValidateAsync(req, cancellation);
+            await OnBeforeValidateAsync(req, ct);
 
             await ValidateRequest(
                 req,
-                ctx,
-                endpoint,
-                endpoint.PreProcessors,
+                HttpContext,
+                Definition,
+                Definition.PreProcessorList,
                 ValidationFailures,
-                cancellation);
+                ct);
 
             OnAfterValidate(req);
-            await OnAfterValidateAsync(req, cancellation);
+            await OnAfterValidateAsync(req, ct);
 
-            await RunPreprocessors(endpoint.PreProcessors, req, ctx, ValidationFailures, cancellation);
+            await RunPreprocessors(Definition.PreProcessorList, req, HttpContext, ValidationFailures, ct);
 
             if (ResponseStarted) //HttpContext.Response.HasStarted doesn't work in AWS lambda!!!
                 return; //response already sent to client (most likely from a preprocessor)
 
             OnBeforeHandle(req);
-            await OnBeforeHandleAsync(req, cancellation);
+            await OnBeforeHandleAsync(req, ct);
 
-            if (endpoint.ExecuteAsyncImplemented)
-                _response = await ExecuteAsync(req, cancellation);
+            if (Definition.ExecuteAsyncImplemented)
+                _response = await ExecuteAsync(req, ct);
             else
-                await HandleAsync(req, cancellation);
+                await HandleAsync(req, ct);
 
             if (!ResponseStarted)
-                await AutoSendResponse(ctx, _response, endpoint.SerializerContext, cancellation);
+                await AutoSendResponse(HttpContext, _response, Definition.SerializerContext, ct);
 
-            OnAfterHandle(req, Response);
-            await OnAfterHandleAsync(req, Response, cancellation);
-
-            await RunPostProcessors(endpoint.PostProcessors, req, Response, ctx, ValidationFailures, cancellation);
+            OnAfterHandle(req, _response);
+            await OnAfterHandleAsync(req, _response, ct);
         }
         catch (ValidationFailureException)
         {
             OnValidationFailed();
-            await OnValidationFailedAsync(cancellation);
+            await OnValidationFailedAsync(ct);
 
-            await SendErrorsAsync(ErrRespStatusCode, cancellation);
+            if (!Definition.DoNotCatchExceptions)
+                await SendErrorsAsync(FastEndpoints.Config.ErrOpts.StatusCode, ct);
+            else
+                throw;
+        }
+        catch (JsonException x)
+        {
+            OnValidationFailed();
+            await OnValidationFailedAsync(ct);
+
+            if (!Definition.DoNotCatchExceptions)
+            {
+                ValidationFailures.Add(new(x.Path?[2..] ?? "Unknown", x.InnerException?.Message ?? "Unknown de-serialization error!"));
+                await SendErrorsAsync(FastEndpoints.Config.ErrOpts.StatusCode, ct);
+            }
+            else
+            {
+                throw;
+            }
+        }
+        finally
+        {
+            await RunPostProcessors(Definition.PostProcessorList, req, _response, HttpContext, ValidationFailures, ct);
         }
     }
 
@@ -79,41 +133,16 @@ public abstract partial class Endpoint<TRequest, TResponse> : BaseEndpoint, ISer
     [NotImplemented]
     public virtual Task<TResponse> ExecuteAsync(TRequest req, CancellationToken ct) => throw new NotImplementedException();
 
-    /// <summary>
-    /// try to resolve an instance for the given type from the dependency injection container. will return null if unresolvable.
-    /// </summary>
-    /// <typeparam name="TService">the type of the service to resolve</typeparam>
-    public TService? TryResolve<TService>() where TService : class => HttpContext.RequestServices.GetService<TService>();
-    /// <summary>
-    /// try to resolve an instance for the given type from the dependency injection container. will return null if unresolvable.
-    /// </summary>
-    /// <param name="typeOfService">the type of the service to resolve</param>
-    public object? TryResolve(Type typeOfService) => HttpContext.RequestServices.GetService(typeOfService);
-    /// <summary>
-    /// resolve an instance for the given type from the dependency injection container. will throw if unresolvable.
-    /// </summary>
-    /// <typeparam name="TService">the type of the service to resolve</typeparam>
-    /// <exception cref="InvalidOperationException">Thrown if requested service cannot be resolved</exception>
-    public TService Resolve<TService>() where TService : class => HttpContext.RequestServices.GetRequiredService<TService>();
-    /// <summary>
-    /// resolve an instance for the given type from the dependency injection container. will throw if unresolvable.
-    /// </summary>
-    /// <param name="typeOfService">the type of the service to resolve</param>
-    /// <exception cref="InvalidOperationException">Thrown if requested service cannot be resolved</exception>
-    public object Resolve(Type typeOfService) => HttpContext.RequestServices.GetRequiredService(typeOfService);
-
-    /// <summary>
-    /// publish the given model/dto to all the subscribers of the event notification
-    /// </summary>
-    /// <param name="eventModel">the notification event model/dto to publish</param>
-    /// <param name="waitMode">specify whether to wait for none, any or all of the subscribers to complete their work</param>
-    ///<param name="cancellation">an optional cancellation token</param>
-    /// <returns>a Task that matches the wait mode specified.
-    /// Mode.WaitForNone returns an already completed Task (fire and forget).
-    /// Mode.WaitForAny returns a Task that will complete when any of the subscribers complete their work.
-    /// Mode.WaitForAll return a Task that will complete only when all of the subscribers complete their work.</returns>
-    public Task PublishAsync<TEvent>(TEvent eventModel, Mode waitMode = Mode.WaitForAll, CancellationToken cancellation = default) where TEvent : class
-        => Event<TEvent>.PublishAsync(eventModel, waitMode, cancellation);
+    /// <inheritdoc/>
+    public TService? TryResolve<TService>() where TService : class => FastEndpoints.Config.ServiceResolver.TryResolve<TService>();
+    /// <inheritdoc/>
+    public object? TryResolve(Type typeOfService) => FastEndpoints.Config.ServiceResolver.TryResolve(typeOfService);
+    ///<inheritdoc/>
+    public TService Resolve<TService>() where TService : class => FastEndpoints.Config.ServiceResolver.Resolve<TService>();
+    ///<inheritdoc/>
+    public object Resolve(Type typeOfService) => FastEndpoints.Config.ServiceResolver.Resolve(typeOfService);
+    ///<inheritdoc/>
+    public IServiceScope CreateScope() => FastEndpoints.Config.ServiceResolver.CreateScope();
 
     /// <summary>
     /// get the value of a given route parameter by specifying the resulting type and param name.
@@ -127,10 +156,10 @@ public abstract partial class Endpoint<TRequest, TResponse> : BaseEndpoint, ISer
     {
         if (HttpContext.Request.RouteValues.TryGetValue(paramName, out var val))
         {
-            var res = typeof(T).ValueParser()?.Invoke(val);
+            var res = typeof(T).ValueParser()(val);
 
-            if (res?.isSuccess is true)
-                return (T?)res?.value;
+            if (res.IsSuccess)
+                return (T?)res.Value;
 
             if (isRequired)
                 ValidationFailures.Add(new(paramName, "Unable to read value of route parameter!"));
@@ -157,10 +186,10 @@ public abstract partial class Endpoint<TRequest, TResponse> : BaseEndpoint, ISer
     {
         if (HttpContext.Request.Query.TryGetValue(paramName, out var val))
         {
-            var res = typeof(T).ValueParser()?.Invoke(val.ToString());
+            var res = typeof(T).ValueParser()(val);
 
-            if (res?.isSuccess is true)
-                return (T?)res?.value;
+            if (res.IsSuccess)
+                return (T?)res.Value;
 
             if (isRequired)
                 ValidationFailures.Add(new(paramName, "Unable to read value of query parameter!"));
@@ -174,12 +203,78 @@ public abstract partial class Endpoint<TRequest, TResponse> : BaseEndpoint, ISer
 
         return default;// not required and retrieval failed
     }
+
+    /// <summary>
+    /// gets a stream of nullable FileMultipartSections from the incoming multipart/form-data without buffering the whole file to memory/disk as done with IFormFile
+    /// </summary>
+    /// <param name="cancellation">optional cancellation token</param>
+    public async IAsyncEnumerable<FileMultipartSection?> FormFileSectionsAsync([EnumeratorCancellation] CancellationToken cancellation = default)
+    {
+        var reader = new MultipartReader(HttpContext.Request.GetMultipartBoundary(), HttpContext.Request.Body);
+
+        MultipartSection? section;
+
+        while ((section = await reader.ReadNextSectionAsync(cancellation)) is not null)
+        {
+            if (section.GetContentDispositionHeader()?.IsFileDisposition() is true)
+                yield return section.AsFileSection();
+        }
+    }
+
+    ///<inheritdoc/>
+    public Task PublishAsync<TEvent>(TEvent eventModel, Mode waitMode = Mode.WaitForAll, CancellationToken cancellation = default) where TEvent : notnull
+        => FastEndpoints.Config.ServiceResolver.Resolve<Event<TEvent>>().PublishAsync(eventModel, waitMode, cancellation);
+
+    /// <summary>
+    /// create the access/refresh token pair response with a given refresh-token service.
+    /// </summary>
+    /// <typeparam name="TService"></typeparam>
+    /// <param name="userId">the id of the user for which the tokens will be generated for</param>
+    /// <param name="userPrivileges">the user priviledges to be embeded in the jwt such as roles/claims/permissions</param>
+    protected Task<TResponse> CreateTokenWith<TService>(string userId, Action<UserPrivileges> userPrivileges) where TService : IRefreshTokenService<TResponse>
+    {
+        return ((IRefreshTokenService<TResponse>)FastEndpoints.Config.ServiceResolver.CreateInstance(
+            typeof(TService), HttpContext.RequestServices)).CreateToken(userId, userPrivileges, null);
+    }
+}
+
+/// <summary>
+/// use this base class for defining endpoints that use both request and response dtos as well as require mapping to and from a domain entity using a seperate entity mapper.
+/// </summary>
+/// <typeparam name="TRequest">the type of the request dto</typeparam>
+/// <typeparam name="TResponse">the type of the response dto</typeparam>
+/// <typeparam name="TMapper">the type of the entity mapper</typeparam>
+public abstract class Endpoint<TRequest, TResponse, TMapper> : Endpoint<TRequest, TResponse>, IHasMapper<TMapper> where TRequest : notnull, new() where TResponse : notnull where TMapper : notnull, IMapper
+{
+    private TMapper? _mapper;
+
+    /// <summary>
+    /// the entity mapper for the endpoint
+    /// <para>HINT: entity mappers are singletons for performance reasons. do not maintain state in the mappers.</para>
+    /// </summary>
+    [DontInject]
+    public TMapper Map {
+        get => _mapper ??= (TMapper)Definition.GetMapper()!;
+        set => _mapper = value; //allow unit tests to set mapper from outside
+    }
+
+    public Task SendMapped<TEntity>(TEntity entity, int statusCode = 200, CancellationToken ct = default)
+    {
+        var resp = ((Mapper<TRequest, TResponse, TEntity>)Definition.GetMapper()!).FromEntity(entity);
+        return SendAsync(resp, statusCode, ct);
+    }
+
+    public async Task SendMappedAsync<TEntity>(TEntity entity, int statusCode = 200, CancellationToken ct = default)
+    {
+        var resp = await ((Mapper<TRequest, TResponse, TEntity>)Definition.GetMapper()!).FromEntityAsync(entity, ct);
+        await SendAsync(resp, statusCode, ct);
+    }
 }
 
 /// <summary>
 /// use this base class for defining endpoints that doesn't need a request dto. usually used for routes that doesn't have any parameters.
 /// </summary>
-public abstract class EndpointWithoutRequest : Endpoint<EmptyRequest>
+public abstract class EndpointWithoutRequest : Endpoint<EmptyRequest, object>
 {
     /// <summary>
     /// the handler method for the endpoint. this method is called for each request received.
@@ -212,7 +307,7 @@ public abstract class EndpointWithoutRequest : Endpoint<EmptyRequest>
 /// use this base class for defining endpoints that doesn't need a request dto but return a response dto.
 /// </summary>
 /// <typeparam name="TResponse">the type of the response dto</typeparam>
-public abstract class EndpointWithoutRequest<TResponse> : Endpoint<EmptyRequest, TResponse> where TResponse : notnull, new()
+public abstract class EndpointWithoutRequest<TResponse> : Endpoint<EmptyRequest, TResponse>
 {
     /// <summary>
     /// the handler method for the endpoint. this method is called for each request received.
@@ -242,24 +337,35 @@ public abstract class EndpointWithoutRequest<TResponse> : Endpoint<EmptyRequest,
 }
 
 /// <summary>
-/// use this base class for defining endpoints that only use a request dto and don't use a response dto.
+/// use this base class for defining endpoints that doesn't need a request dto but return a response dto and uses a response mapper.
 /// </summary>
-/// <typeparam name="TRequest">the type of the request dto</typeparam>
-public abstract class Endpoint<TRequest> : Endpoint<TRequest, object> where TRequest : notnull, new() { };
-
-/// <summary>
-/// use this base class for defining endpoints that use both request and response dtos as well as require mapping to and from a domain entity using a seperate entity mapper.
-/// </summary>
-/// <typeparam name="TRequest">the type of the request dto</typeparam>
 /// <typeparam name="TResponse">the type of the response dto</typeparam>
 /// <typeparam name="TMapper">the type of the entity mapper</typeparam>
-public abstract class Endpoint<TRequest, TResponse, TMapper> : Endpoint<TRequest, TResponse> where TRequest : notnull, new() where TResponse : notnull, new() where TMapper : notnull, IEntityMapper, new()
+public abstract class EndpointWithoutRequest<TResponse, TMapper> : EndpointWithoutRequest<TResponse>, IHasMapper<TMapper> where TResponse : notnull where TMapper : notnull, IResponseMapper
 {
+    private TMapper? _mapper;
+
     /// <summary>
     /// the entity mapper for the endpoint
     /// <para>HINT: entity mappers are singletons for performance reasons. do not maintain state in the mappers.</para>
     /// </summary>
-    public static TMapper Map { get; } = new();
+    [DontInject]
+    public TMapper Map {
+        get => _mapper ??= (TMapper)Definition.GetMapper()!;
+        set => _mapper = value; //allow unit tests to set mapper from outside
+    }
+
+    public Task SendMapped<TEntity>(TEntity entity, int statusCode = 200, CancellationToken ct = default)
+    {
+        var resp = ((ResponseMapper<TResponse, TEntity>)Definition.GetMapper()!).FromEntity(entity);
+        return SendAsync(resp, statusCode, ct);
+    }
+
+    public async Task SendMappedAsync<TEntity>(TEntity entity, int statusCode = 200, CancellationToken ct = default)
+    {
+        var resp = await ((ResponseMapper<TResponse, TEntity>)Definition.GetMapper()!).FromEntityAsync(entity, ct);
+        await SendAsync(resp, statusCode, ct);
+    }
 }
 
 /// <summary>
@@ -268,7 +374,7 @@ public abstract class Endpoint<TRequest, TResponse, TMapper> : Endpoint<TRequest
 /// <typeparam name="TRequest">the type of the request dto</typeparam>
 /// <typeparam name="TResponse">the type of the response dto</typeparam>
 /// <typeparam name="TEntity">the type of domain entity that will be mapped to/from</typeparam>
-public abstract class EndpointWithMapping<TRequest, TResponse, TEntity> : Endpoint<TRequest, TResponse> where TRequest : notnull, new() where TResponse : notnull, new()
+public abstract class EndpointWithMapping<TRequest, TResponse, TEntity> : Endpoint<TRequest, TResponse> where TRequest : notnull, new()
 {
     /// <summary>
     /// override this method and place the logic for mapping the request dto to the desired domain entity
@@ -279,7 +385,8 @@ public abstract class EndpointWithMapping<TRequest, TResponse, TEntity> : Endpoi
     /// override this method and place the logic for mapping the request dto to the desired domain entity
     /// </summary>
     /// <param name="r">the request dto to map from</param>
-    public virtual Task<TEntity> MapToEntityAsync(TRequest r) => throw new NotImplementedException($"Please override the {nameof(MapToEntityAsync)} method!");
+    /// <param name="ct">a cancellation token</param>
+    public virtual Task<TEntity> MapToEntityAsync(TRequest r, CancellationToken ct = default) => throw new NotImplementedException($"Please override the {nameof(MapToEntityAsync)} method!");
 
     /// <summary>
     /// override this method and place the logic for mapping a domain entity to a response dto
@@ -290,5 +397,6 @@ public abstract class EndpointWithMapping<TRequest, TResponse, TEntity> : Endpoi
     /// override this method and place the logic for mapping a domain entity to a response dto
     /// </summary>
     /// <param name="e">the domain entity to map from</param>
-    public virtual Task<TResponse> MapFromEntityAsync(TEntity e) => throw new NotImplementedException($"Please override the {nameof(MapFromEntityAsync)} method!");
+    /// <param name="ct">a cancellation token</param>
+    public virtual Task<TResponse> MapFromEntityAsync(TEntity e, CancellationToken ct = default) => throw new NotImplementedException($"Please override the {nameof(MapFromEntityAsync)} method!");
 }

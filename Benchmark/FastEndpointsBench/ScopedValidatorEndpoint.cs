@@ -1,7 +1,7 @@
 ﻿using FastEndpoints;
 using FluentValidation;
 
-namespace FastEndpointsBench;
+namespace FEBench;
 
 public class ScopedValidatorRequest
 {
@@ -34,22 +34,22 @@ public class ScopedValidatorResponse
 public class ScopedValidatorEndpoint : Endpoint<ScopedValidatorRequest>
 {
     public ILogger<ScopedValidatorEndpoint>? MyProperty { get; set; }
+    public ScopedValidator? Validator { get; set; }
 
     public override void Configure()
     {
         Verbs(Http.POST);
         Routes("/benchmark/scoped-validator/{id}");
         AllowAnonymous();
-        ScopedValidator();
     }
 
-    public override Task HandleAsync(ScopedValidatorRequest req, CancellationToken ct)
+    public async override Task HandleAsync(ScopedValidatorRequest req, CancellationToken ct)
     {
         //Logger.LogInformation("request received!");
 
-        //validator is automatically being run by FastEndpoints
+        await Validator!.ValidateAsync(req, ct);
 
-        return SendAsync(new ScopedValidatorResponse()
+        await SendAsync(new ScopedValidatorResponse()
         {
             Id = req.Id,
             Name = req.FirstName + " " + req.LastName,

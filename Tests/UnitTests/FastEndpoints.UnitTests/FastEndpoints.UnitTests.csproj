@@ -4,9 +4,4 @@
         <ProjectReference Include="..\..\..\Web\Web.csproj" />
     </ItemGroup>
 
-    <ItemGroup>
-      <PackageReference Update="MartinCostello.Logging.XUnit" Version="0.3.0" />
-      <PackageReference Update="Microsoft.AspNetCore.Mvc.Testing" Version="6.0.6" />
-    </ItemGroup>
-
 </Project>
